@@ -1,0 +1,706 @@
+---
+output: pdf_document
+---
+
+# FE590.  Assignment #4.
+
+
+## SHASHWAT TYAGI
+## `r format(Sys.time(), "%Y-%m-%d")`
+
+
+# Instructions
+
+
+When you have completed the assignment, knit the document into a PDF file, and upload _both_ the .pdf and .Rmd files to Canvas.
+
+Note that you must have LaTeX installed in order to knit the equations below.  If you do not have it installed, simply delete the questions below.
+```{r}
+
+CWID = 10432648 #Place here your Campus wide ID number, this will personalize
+#your results, but still maintain the reproduceable nature of using seeds.
+#If you ever need to reset the seed in this assignment, use this as your seed
+#Papers that use -1 as this CWID variable will earn 0's so make sure you change
+#this value before you submit your work.
+personal = CWID %% 10000
+set.seed(personal)
+
+```
+
+# Question 1:
+In this assignment, you will be required to find a set of data to run regression on.  This data set should be financial in nature, and of a type that will work with the models we have discussed this semester (hint: we didn't look at time series)  You may not use any of the data sets in the ISLR package that we have been looking at all semester.  Your data set that you choose should have both qualitative and quantitative variables. (or has variables that you can transform)
+
+Provide a description of the data below, where you obtained it, what the variable names are and what it is describing.
+
+```{r}
+
+## The data is of Costco stock for past 4 years been downloaded from Yahoo Finance
+## (https://finance.yahoo.com/quote/APPL/history). The data includes the Date (date of stock),
+## Open (Opening price) ,High (highest price for the day), Low (Lowest price for the day), 
+## Close (Closing price), Volume (Volume of stocks traded), Return (Return for the day), 
+## Lag_1,Lag_2,Lag_3,lag_4 (lag_1, lag_2, lag_3 and Lag_4 are returns of a day from next
+##  4 days in order respectively) and, Direction (direction of the movement of stock)
+
+```
+
+```{r}
+
+## loading the libraries I will be usng in this assignment
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(readr, MASS, randomForest,tree,ipred,leaps,pls,class,glmnet,rpart, ISLR, e1071)
+
+```
+
+
+
+```{r}
+
+## loading data
+setwd("D:/Work/Stevens Institute of Technology/SEM 3/FE 590/Assignment 4")
+Costco = read.csv("COST.csv",header = TRUE)
+
+## function to create the values of lag variables 
+func = function(x,Shift_By)
+  {
+  stopifnot(is.numeric(Shift_By))
+  stopifnot(is.numeric(x))
+  
+  if (length(Shift_By)>1)
+    return(sapply(Shift_By,func, x=x))
+
+  output = NULL
+  
+  abs_Shift_By = abs(Shift_By)
+  if (Shift_By > 0 )
+    output = c(tail(x,-abs_Shift_By),rep(NA,abs_Shift_By))
+  else if (Shift_By < 0 )
+    output = c(rep(NA,abs_shift_By), head(x,-abs_Shift_By))
+  else
+    output = x
+  }
+
+## calculating the return for the day
+Return_stock = (func(Costco$Open,1)-Costco$Close)/Costco$Close
+Costco$Return = Return_stock
+
+## creating lags(returns from next 4 days)
+Lag_1 = (func(Costco$Open,1)-Costco$Close)/Costco$Close ## return from next day
+Lag_2 = (func(Costco$Open,2)-Costco$Close)/Costco$Close ## return from upcoming 2nd day
+Lag_3 = (func(Costco$Open,3)-Costco$Close)/Costco$Close ## return from upcoming 3rd day
+Lag_4 = (func(Costco$Open,4)-Costco$Close)/Costco$Close ## return from upcoming 4th day
+Costco$Lag_1 = Lag_1
+Costco$Lag_2 = Lag_2
+Costco$Lag_3 = Lag_3
+Costco$Lag_4 = Lag_4
+
+## removing the NA values from the Costco dataset
+Costco = na.omit(Costco)
+
+## creating values for new direction column in table Costco 
+way = function(a)
+  {
+    X = vector()
+    for (i in (1:length(a)))
+      {
+        if (a[i] < 0)
+          X = c(X, "Down")
+        if (a[i] > 0)
+          X = c(X, "Up")
+        if (a[i] == 0)
+          X = c(X, "NA")
+    }
+    return =  X
+}
+
+Costco$way = way(Costco$Return)
+
+## assignmning column names to the table
+colnames(Costco)=(c("Date","Open","High","Low","Close","Adj.Close","Volume",
+                    "Return","Lag_1","Lag_2","Lag_3", "Lag_4","Direction"))
+
+## creating new column Serial in table Costco
+Costco$Serial = c(1:length(Costco$Date))
+dim(Costco)
+
+```
+
+```{r}
+
+head(Costco)
+
+```
+
+
+
+# Question 2:
+
+Pick a quantitative variable and fit at least four different models in order to predict that variable using the other predictors.  Determine which of the models is the best fit.  You will need to provide strong reasons as to why the particular model you chose is the best one.  You will need to confirm the model you have selected provides the best fit and that you have obtained the best version of that particular model (i.e. subset selection or validation for example).  You need to convince the grader that you have chosen the best model.
+
+
+```{r}
+
+## checking the correlation of all the clounms with the Close price. 
+## Will be using the one having highest corrlation to predict our Close price
+
+Cor1 = cor(Costco$Close, Costco$Lag_1)
+Cor1
+
+Cor2 = cor(Costco$Close, Costco$Lag_2)
+Cor2
+
+Cor3 = cor(Costco$Close, Costco$Lag_3)
+Cor3
+
+Cor4 = cor(Costco$Close, Costco$Lag_4)
+Cor4
+
+Cor5 = cor(Costco$Close, Costco$Low)
+Cor5
+
+Cor7 = cor(Costco$Close, Costco$High)
+Cor7
+
+Cor8 = cor(Costco$Close, Costco$Open)
+Cor8
+ 
+## I will be building my linear model on the basis of High price, since there it has the  
+## highest positive correlation with the Close price, we can prdict the Close price
+## with maximum precision
+
+```
+
+
+## 1. LINEAR REGRESSION 
+
+linear regression is a linear approach to modelling the relationship between a scalar response (or dependent variable) and one or more explanatory variables (or independent variables)
+
+```{r}
+
+## I will be using top 70% of data for training and bottom 30% for testing
+index = (Costco$Serial < 701) 
+test_data = Costco[!index,]
+train_data = Costco[index,]
+
+dim(test_data)
+
+## using regsubsets which is a generic function for regression subset selection
+s = regsubsets(Close~Lag_1+Lag_2+Lag_3+Lag_4+High+Low+Open, data = train_data,
+               method = "exhaustive")
+
+summary(s)[7]
+
+## the best 1 variable model is with "High"" and this also matches with
+## the corelation result 
+
+```
+
+```{r}
+
+## Using High as the predicting variable
+
+## training the model
+train_model=lm(Close~High,data = train_data)
+## predicting the values
+linear_Price_predict=predict(train_model,test_data,type="response")
+
+lm_mean = mean((linear_Price_predict - test_data$Close)^2)
+
+#looking at model's statisctics
+summary(train_model)
+
+```
+
+
+```{r}
+
+## These are the predicted Close prices of Costco vs Actual price
+compare =  matrix(c(head(linear_Price_predict),head(test_data$High)), ncol=2)
+colnames(compare) = c('Predicted_Price', 'Actual_Price')
+rownames(compare) = c(head(test_data$Serial))
+compare_table = as.table(compare)
+compare_table
+
+## the difference in the predicted and the actual price is almost $1, 
+## thus we can day model is working well
+```
+
+
+```{r}
+
+## checking the R squared value for the Linear model
+RSS = sum((linear_Price_predict - test_data$Close)^2)
+TSS = sum((test_data$Close - mean(test_data$Close))^2)
+R_squared = 1 - (RSS/TSS)
+                 
+R_squared
+
+```
+
+
+
+## 2. MULTIPLE LINEAR REGRESSION
+
+Multiple linear regression attempts to model the relationship between two or more explanatory variables and a response variable by fitting a linear equation to observed data. Every value of the independent variable x is associated with a value of the dependent variable y.
+
+```{r}
+## we will using Mallow Cp to find the number of predictor
+## for best result
+
+c = summary(s)$cp
+plot(c ,type='b',xlab="No. of Predictors",
+     ylab=expression("Mallows C"[P]),col="blue")
+points(which.min(c), c[which.min(c)],pch=20,col="red")
+
+## as we can see according to Mallow Cp, 3 predictors will give the best results.
+## Therefore we will be using the best three
+```
+
+
+```{r}
+
+summary(s)[7]
+
+# The best three predictors are High, Low, Open
+
+```
+
+
+```{r}
+
+## Now I will be using multiple predictors (High, Low, Open) in multiple linear regression to
+## predict the Close price , again I will be using top 70% data to train and 30% to test
+
+index = (Costco$Serial < 701) 
+test_data = Costco[!index,]
+train_data = Costco[index,]
+
+dim(test_data)
+
+## traning the model
+train_model = lm(Close~High+Low+Open,data=train_data)
+## predicting the values
+multiple_lm_Price_predict = predict(train_model,test_data,type="response")
+
+multiple_mean = mean((multiple_lm_Price_predict - test_data$Close)^2)
+
+summary(train_model)
+
+```
+
+```{r}
+
+## These are the predicted Close prices of Costco vs Actual price
+compare =  matrix(c(head(multiple_lm_Price_predict),head(test_data$High)), ncol=2)
+colnames(compare) = c('Predicted Price', 'Actual Price')
+rownames(compare) = c(head(test_data$Serial))
+compare_table = as.table(compare)
+compare_table
+
+## the difference in the predicted and the actual price in multiple linear model ($0.90)
+## is even lower than the linear regression, thus we can say this model is much precise
+```
+
+
+```{r}
+
+## checking the R suqraed valed for the multiple linear model
+RSS = sum((multiple_lm_Price_predict - test_data$Close)^2)
+TSS = sum((test_data$Close - mean(test_data$Close))^2)
+R_squared = 1 - (RSS/TSS)
+                 
+R_squared
+
+```
+
+
+
+## 3. SUPPORT VECTOR REGRESSION
+
+Support Vector Machine - Regression (SVR) Support Vector Machine can also be used as a regression method, maintaining all the main features that characterize the algorithm (maximal margin). The Support Vector Regression (SVR) uses the same principles as the SVM for classification, with only a few minor differences.
+
+```{r}
+
+## Now I will be using Support Vector Rregression to predict the Close price, using top 
+## 70% data to train and 30% to test
+index = (Costco$Serial < 701) 
+test_data = Costco[!index,]
+train_data = Costco[index,]
+
+## training the model
+SVM_model = svm(Close~High+Low+Open, data = train_data)
+## predicting the values
+svm_Price_predict = predict(SVM_model, test_data)
+
+svm_mean = mean((svm_Price_predict - test_data$Close)^2)
+
+summary(SVM_model)
+
+```
+
+```{r}
+
+## These are the predicted Close prices of Costco vs Actual price
+compare =  matrix(c(head(svm_Price_predict),head(test_data$High)), ncol=2)
+colnames(compare) = c('Predicted Price', 'Actual Price')
+rownames(compare) = c(head(test_data$Serial))
+compare_table = as.table(compare)
+compare_table
+
+## Predicted values are very close to that of actual values (off just by almost $1)
+```
+
+
+
+
+## 4. LASSO REGRESSION
+
+Lasso regression. Lasso stands for Least Absolute Shrinkage and Selection Operator. It shrinks the regression coefficients toward zero by penalizing the regression model with a penalty term called L1-norm, which is the sum of the absolute coefficients
+
+```{r}
+
+## Now I will be using multiple predictors in Lasso regression model to
+## predict the Close price , using top 70% data to train and 30% to test
+index = (Costco$Serial < 701) 
+test_data = Costco[!index,]
+train_data = Costco[index,]
+
+lasso_x = model.matrix(Close~Lag_2+Lag_3+Lag_4+High+Low+Open, data = train_data)
+lasso_y = train_data$Close
+
+cv_out_lasso = cv.glmnet(lasso_x, lasso_y, alpha = 1)
+
+best_lam_lasso = cv_out_lasso$lambda.min
+
+lasso_x_test = model.matrix(Close~Lag_2+Lag_3+Lag_4+High+Low+Open, data = test_data)
+                                
+lasso_fit = glmnet(lasso_x, lasso_y, alpha = 1)
+lasso_Price_predict = predict(lasso_fit, s = best_lam_lasso, newx = lasso_x_test)
+
+lasso_mean = mean((lasso_Price_predict - test_data$Close)^2)
+
+## These are the predicted Close prices of Costco vs Actual price
+compare =  matrix(c(head(lasso_Price_predict),head(test_data$High)), ncol=2)
+colnames(compare) = c('Predicted Price', 'Actual Price')
+rownames(compare) = c(head(test_data$Serial))
+compare_table = as.table(compare)
+compare_table
+
+## This model too predict the Close Price very close to that of actual Close Price,
+## difference of almost $1.1
+```
+
+```{r}
+
+RSS = sum((test_data$Close - lasso_Price_predict)^2)
+TSS = sum((test_data$Close - mean(test_data$Close))^2)
+R_squared = 1 - (RSS/TSS)
+
+R_squared
+
+
+```
+
+```{r}
+
+## checking for the best model
+data.frame(Model=c('lm_mean', 'multiple_mean', 'svm_mean','lasso_mean'),
+           MSE=c(lm_mean, multiple_mean, svm_mean, lasso_mean))
+
+```
+
+```{r}
+
+## based on above comparision on the basis of MSE, Multiple linear regression model has the best fit
+
+```
+
+
+
+
+
+# Question 3:
+
+Do the same approach as in question 2, but this time for a qualitative variable.
+
+```{r}
+
+## Creating a new column "indicator" which encodes the direction values in numeric form
+Costco_direction = Costco$Direction
+l = length(Costco_direction)
+
+Costco$indicator = NA
+
+## filling values of indicator column in Costco table
+for(s in 1:l)
+  {
+    if(Costco_direction[s] == "Up")
+      Costco$indicator[s] = 1
+      
+  else if (Costco_direction[s] == "Down")
+        Costco$indicator[s] = 0
+ }
+
+head(Costco)
+
+index = (Costco$Serial < 701)
+test_dataset = Costco[!index,]
+dim(test_dataset)
+train_data = Costco[index,]
+dim(train_data)
+direction = test_dataset$Direction
+
+```
+
+## 1. LINEAR DISCRIMINAT ANALYSIS
+
+LDA (Linear Discriminant Analysis) is used when a linear boundary is required between classifiers
+
+```{r}
+
+direction = test_dataset$Direction
+
+## traing the model
+train_lda = lda(Direction~Close+Lag_2+Lag_3+Lag_4+High+Low,data=train_data)
+## predecting the values
+predict_lda = predict(train_lda, test_dataset)
+
+class_lda = predict_lda$class
+
+## creating the confusion matrix
+confusion_matrix = table(class_lda, direction)
+confusion_matrix
+
+## out of total 174 UP's model has correctlty predected  150 UP's. However model has only predicted 
+## only 32 out 126 Down's.
+```
+
+
+```{r}
+
+mean(class_lda == direction)
+
+```
+
+```{r}
+
+##cheching the accuracy of the model
+accuracy = (sum(diag(confusion_matrix))/sum(confusion_matrix))*100
+accuracy
+
+# Acuuracy of the model is 59.86%
+```
+
+
+
+
+## 2. QUADRATIC DISCRIMINAT ANALYSIS
+
+QDA (Quadratic Discriminant Analysis) is used to find a non-linear boundary between classifiers.
+
+```{r}
+
+## traning the model
+train_qda = qda(Direction~Close+Lag_2+Lag_3+Lag_4+High+Low,data=train_data)
+## predicting the value
+predict_qda = predict(train_qda,test_dataset)
+class_qda = predict_qda$class
+
+## creating the confusion matrix
+confusion_matrix = table(class_qda, direction)
+confusion_matrix
+
+## out of total 174 UP's model has correctlty predected  126 UP's. 
+## However model has improved on the prediction of 54 DOWN's out of 126 DOWN's.
+```
+
+```{r}
+
+mean(class_qda == direction)
+
+```
+
+```{r}
+
+## Checking the accuracy of the model
+accuracy = (sum(diag(confusion_matrix))/sum(confusion_matrix))*100
+accuracy
+
+
+## Accuracy of QDA model is 59.21% 
+```
+
+
+## 3. LOGISTIC REGRESSION MODEL
+
+logistic regression (or logit regression) is estimating the parameters of a logistic model; it is a form of binomial regression
+
+```{r}
+
+## training the model for our binomial column "indicator"
+model = glm(indicator~Close+Lag_2+Lag_3+Lag_4+High+Low,data=train_data,family=binomial)
+## predicting the probability of the values 
+test_probs = predict(model,test_dataset,type="response")
+
+## creating array of DOWN's of lenght that of the predicted values
+predict_logit = rep("Down",length(test_probs))
+
+## defineing the values of the probabilities. Probabilities below .5 are assigned 
+## as DOWN and probabilities greater than .5 are assigned as UP
+predict_logit[test_probs >= .5] = "Up"
+
+#creating confusion matrix
+confusion_matrix = ftable(predict_logit, direction )
+confusion_matrix
+
+## Model has correctly  predicted 142 UP's out of 174, and 43 DOWN's out of 126
+```
+
+
+```{r}
+
+## Checking the Accuracy of the model
+accuracy = (mean(predict_logit == direction))*100
+accuracy
+
+## Accuracy of the Logistic model is 60.85%
+```
+
+
+## 4. DECISION TREE
+
+A decision tree is a decision support tool that uses a tree-like model of decisions and their possible consequences, including chance event outcomes, resource costs, and utility. It is one way to display an algorithm that only contains conditional control statements.
+
+```{r}
+
+## traing the model
+tree_model = rpart(Direction~Close+Lag_2+Lag_3+Lag_4+High+Low+Open, data= train_data, method='class')
+
+## plotting the tree
+plot(tree_model)
+text(tree_model,pretty=0)
+
+## predicting the values 
+tree_predict = predict(tree_model, test_dataset, type = 'class')
+
+```
+
+```{r}
+
+## creating the cofussion matrix
+confusion_matrix = table(tree_predict, direction)
+confusion_matrix
+
+## Model has correctly  predicted 116 UP's out of 174, and 58 DOWN's out of 126. 
+## It has balanced a prediction UP's and Down's
+```
+
+
+```{r}
+
+## Checking the accuracy of the decision tre model
+accuracy = (mean(tree_predict == direction))*100
+accuracy
+
+## for my dataset Acuracy of the Decision tree model is lowest at 57.23%
+```
+
+```{r}
+
+## For my dataset Logistic Regression model gives best results 
+## with an accuracy of 60.85%. 
+
+```
+
+
+
+# Question 4:
+
+(Based on ISLR Chapter 9 #7) In this problem, you will use support vector approaches in order to
+predict whether a given car gets high or low gas mileage based on the
+Auto data set.
+
+##(a)
+Create a binary variable that takes on a 1 for cars with gas mileage above the median, and a 0 for cars with gas mileage below the median.
+
+```{r}
+set.seed(personal)
+
+median_gas = median(Auto$mpg)
+a = ifelse(Auto$mpg > median_gas, 1, 0)
+Auto$mpglevel = as.factor(a)
+
+```
+
+##(b)
+Fit a support vector classifier to the data with various values of cost, in order to predict whether a car gets high or low gas mileage. Report the cross-validation errors associated with different values of this parameter. 
+Comment on your results.
+
+```{r}
+
+## tunning the hyperparameters for linear type kernel
+x_tune = tune(svm, mpglevel ~ ., data = Auto, kernel = "linear",
+              ranges = list(cost = c(0.01, 0.1, 1, 5, 10, 100)))
+summary(x_tune)
+
+## We can see from the above result that the cross-validation error is minimized for cost = 1.
+```
+
+
+
+##(c)
+Now repeat for (b), this time using SVMs with radial and polynomial basis kernels, with different values of gamma and degree and cost. Comment on your results.
+
+```{r}
+
+set.seed(personal)
+
+## tunning the hyperparameters for polynomial type kernel
+x_tune = tune(svm, mpglevel ~ ., data = Auto, kernel = "polynomial", 
+              ranges = list(cost = c(0.1, 1, 5, 10), degree = c(2, 3, 4)))
+summary(x_tune)
+
+## The smallest cross-validation error is obtained at cost = 10 and degree = 2
+```
+
+
+
+```{r}
+
+set.seed(personal)
+x_tune = tune(svm, mpglevel ~ ., data = Auto, kernel = "radial", ranges = list(cost = c(0.1, 
+    1, 5, 10), gamma = c(0.01, 0.1, 1, 5, 10, 100)))
+summary(x_tune)
+
+## But, for radial basis kernel smallest cross-validation error is at, cost = 10 and gamma = 0.1.
+```
+
+
+
+##(d)
+Make some plots to back up your assertions in (b) and (c). Hint: In the lab, we used the plot() function for svm objects only in cases with p=2 When p>2,you can use the plot() function to create plots displaying pairs of variables at a time. Essentially, instead of typing plot(svmfit , dat) where svmfit contains your fitted model and dat is a data frame containing your data, you can type plot(svmfit , dat, x1~x4) in order to plot just the first and fourth variables. However, you must replace x1 and x4 with the correct variable names. To find out more, type ?plot.svm.
+
+```{r}
+
+## assignming the svm models to the variable of repsective type
+linear = svm(mpglevel ~ ., data = Auto, kernel = "linear", cost = 1)
+polynomial = svm(mpglevel ~ ., data = Auto, kernel = "polynomial",
+                 cost = 10, degree = 2)
+radial = svm(mpglevel ~ ., data = Auto, kernel = "radial",
+             cost = 10, gamma = 0.1)
+
+## creating the plots
+plot_pairs = function(svmfit) 
+  {
+    for (name in names(Auto)[!(names(Auto) %in% c("mpg", "mpglevel", "name"))]) 
+      {
+        plot(svmfit, Auto, as.formula(paste("mpg~", name, sep = " ")))
+    }
+}
+
+# calling the function for ploting
+plot_pairs(linear)
+plot_pairs(polynomial)
+plot_pairs(radial)
+
+```
+
